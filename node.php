@@ -1,4 +1,17 @@
 <?php
+/*
+PHP SIMPLE BITCOIN NODE
+
+This is a rudimentary script that shows you how to connect to a node and start receiving messages from them (using PHP). The main functions needed for this are:
+
+* socket_create()
+* socket_connect()
+* socket_send
+* socket_recv()
+
+Once you've figured out how those commands work, the rest is just sending the right data in the right format.
+
+*/
 
 // --------
 // SETTINGS
@@ -49,6 +62,7 @@ function socketerror() {
 
 
 // Message Helper Functions 
+
 function timestamp($time) { // convert timestamp to network byte order
 	$time = dechex($time);
 	$time = fieldSize1($time, 8);
@@ -80,30 +94,24 @@ function checksum($string) { // create checksum of message payloads for message 
 	return byteSpaces($checksum);
 }
 
-// Message Functions
-function makeMessage($command, $payload, $testnet = false) {
-
-	// Header
-	$magicbytes = $testnet ? '0B 11 09 07' : 'F9 BE B4 D9';
-	$command = str_pad(ascii2hex($command), 24, '0', STR_PAD_RIGHT); // e.g. 76 65 72 73 69 6F 6E 00 00 00 00 00
-	$payload_size = bytespaces(swapEndian(fieldSize1(dechex(strlen($payload) / 2), 4)));
-	$checksum = checksum($payload);
-
-	$header_array = [
-		'magicbytes'	=> $magicbytes,
-		'command'		=> $command,
-		'payload_size'	=> $payload_size,
-		'checksum'		=> $checksum,
-	];
-
-	$header = str_replace(' ', '', implode($header_array));
-	// echo 'Header: '; print_r($header_array);
+function commandName($data) { // http://www.asciitohex.com/
+	if     ($data == '76657273696f6e0000000000') { $command = 'version'; }
+	elseif ($data == '76657261636b000000000000') { $command = 'verack'; }
+	elseif ($data == '70696e670000000000000000') { $command = 'ping'; }
+	elseif ($data == '616464720000000000000000') { $command = 'addr'; }
+	elseif ($data == '676574686561646572730000') { $command = 'getheaders'; }
+	elseif ($data == '696e76000000000000000000') { $command = 'inv'; }
+	elseif ($data == '676574646174610000000000') { $command = 'getdata'; }
+	elseif ($data == '747800000000000000000000') { $command = 'tx'; }
+	elseif ($data == '626c6f636b00000000000000') { $command = 'block'; }
+	else { $command = $data; }
 	
-	return $header.$payload;
-
+	return $command;
 }
 
-function makeVersionPayload($version, $node_ip, $node_port, $local_ip, $local_port) {
+// Message Functions
+
+function makeVersionMessagePayload($version, $node_ip, $node_port, $local_ip, $local_port) {
 	
 	// settings
 	$services = '0D 00 00 00 00 00 00 00'; // (1 = NODE_NETORK), (D = what I've got from my 0.13.1 node)
@@ -135,19 +143,26 @@ function makeVersionPayload($version, $node_ip, $node_port, $local_ip, $local_po
 
 }
 
-function commandName($data) { // http://www.asciitohex.com/
-	if     ($data == '76657273696f6e0000000000') { $command = 'version'; }
-	elseif ($data == '76657261636b000000000000') { $command = 'verack'; }
-	elseif ($data == '70696e670000000000000000') { $command = 'ping'; }
-	elseif ($data == '616464720000000000000000') { $command = 'addr'; }
-	elseif ($data == '676574686561646572730000') { $command = 'getheaders'; }
-	elseif ($data == '696e76000000000000000000') { $command = 'inv'; }
-	elseif ($data == '676574646174610000000000') { $command = 'getdata'; }
-	elseif ($data == '747800000000000000000000') { $command = 'tx'; }
-	elseif ($data == '626c6f636b00000000000000') { $command = 'block'; }
-	else { $command = $data; }
+function makeMessage($command, $payload, $testnet = false) {
+
+	// Header
+	$magicbytes = $testnet ? '0B 11 09 07' : 'F9 BE B4 D9';
+	$command = str_pad(ascii2hex($command), 24, '0', STR_PAD_RIGHT); // e.g. 76 65 72 73 69 6F 6E 00 00 00 00 00
+	$payload_size = bytespaces(swapEndian(fieldSize1(dechex(strlen($payload) / 2), 4)));
+	$checksum = checksum($payload);
+
+	$header_array = [
+		'magicbytes'	=> $magicbytes,
+		'command'		=> $command,
+		'payload_size'	=> $payload_size,
+		'checksum'		=> $checksum,
+	];
+
+	$header = str_replace(' ', '', implode($header_array));
+	// echo 'Header: '; print_r($header_array);
 	
-	return $command;
+	return $header.$payload;
+
 }
 
 
@@ -155,8 +170,12 @@ function commandName($data) { // http://www.asciitohex.com/
 // 1. SOCKET CONNECT
 // -----------------
 
-// i. Create Version Message (needs to be sent to node you want to connect to)
-$payload = makeVersionPayload($version, $node_ip, $node_port, $local_ip, $local_port);
+// i. Create Version Message
+/*
+This is the initial "handshake" with the node we want to connect to. We send them a version message, and if it is valid they will send a version message back.
+*/
+
+$payload = makeVersionMessagePayload($version, $node_ip, $node_port, $local_ip, $local_port);
 $message = makeMessage('version', $payload, $testnet);
 $message_size = strlen($message) / 2; // the size of the message (in bytes) being sent
 
@@ -170,18 +189,91 @@ socket_send($socket, hex2bin($message), $message_size, 0); // don't forget to se
 // iii. Keep receiving data 
 while (true) {
 
-	// read whats written to the socket 1 byte at a time
+	// Read what's written to the socket 1 byte at a time
+	$buffer = '';
 	while (socket_recv($socket, $byte, 1, MSG_DONTWAIT)) {
+		
+		// Each byte is sent and received in binary, so convert to hex so we can look at it
 		$byte = bin2hex($byte);
+
+		// OPTION 1: Just print out every byte we recevie to the screen.
 		echo $byte;
-	
-		// tiny sleep to prevent looping insanely fast and using up 100% CPU power on one core
-		usleep(5000); // 1/1000th of a second
+
+		// OPTION 2: Decipher and print out indvidual messages, and respond to ping messages to keep connection alive.
+		/*
+		$buffer .= $byte;
+		
+		// if the buffer has received a full header (24 bytes)
+		if (strlen($buffer) == 48) {
+		
+			// parse the header
+			$magic = substr($buffer, 0, 8);
+			$command  = commandName(substr($buffer, 8, 24));
+			$size = hexdec(swapEndian(substr($buffer, 32, 8)));
+			$checksum = substr($buffer, 40, 8);
+			
+			// now read the size of the payload
+			socket_recv($socket, $payload, $size, MSG_WAITALL);
+			$payload = bin2hex($payload);
+			
+			// --------
+			// MESSAGES
+			// --------
+			if ($command == 'version') {
+				echo "version: ".$payload.PHP_EOL;
+				
+			}
+
+			if ($command == 'verack') {
+				echo "verack: ".PHP_EOL;
+				// connection is successful, so could ask for the entire mempool (and get a big "inv message back")
+				
+				// $mempool = makeMessage('mempool', '', $testnet);
+				// socket_send($socket, hex2bin($mempool), strlen($mempool) / 2, 0);
+				
+			}
+			
+			if ($command == 'inv') {
+				echo "inv: ".PHP_EOL.$payload.PHP_EOL;
+				
+				// respond to the inv(entory) message with the same payload, so we they will send us all the txs and blocks in that inv message (in new individual tx and block messages) 
+				$getdata = makeMessage('getdata', $payload);
+				socket_send($socket, hex2bin($getdata), strlen($getdata) / 2, 0);
+				
+			}
+			
+			if ($command == 'tx') {
+				echo "tx: ".PHP_EOL;
+				// do something with the $payload	
+			}
+		
+			if ($command == 'block') {
+				echo "block: ".PHP_EOL;
+				// do something with the $payload
+			}
+			
+			if ($command == 'ping') {
+				echo "ping: ".PHP_EOL;
+				// reply with "pong" message (containing nonce payload we just got) (let node know that we're still alive)
+				$pong = makeMessage('pong', $payload, $testnet);
+				socket_send($socket, hex2bin($pong), strlen($pong) / 2, 0);
+				echo "pong->\n";
+			}
+			
+			// empty the buffer (after reading the 24 byte header and the full payload)
+			$buffer = '';
+
+			// start reading next packet...
+		}
+		*/
+
+
+		// Tiny sleep to prevent looping insanely fast and using up 100% CPU power on one core. You will want to decrease (or remove) this if you are printing 1 byte at a time and want to read every byte as quickly as possible.
+		usleep(5000); // 1/5000th of a second
 	
 	}
 
 }
-
 
 
 /* Resources
