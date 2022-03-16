@@ -13,4 +13,4 @@ Go in to the folder and run:
 ## Tips
 
 * The only stuff you really need is four `socket_*` functions, and with those you can connect and send messages to bitcoin nodes. The rest of the script is just getting the right data in the right format (so that nodes can understand your messages correctly).
-* Don't rely on this for anything. It's just a quick script to show you how easy it is to use PHP to connect to the bitcoin network. 
+* Don't rely on this for anything. It's just a quick script to show you how easy it is to use PHP to connect to the bitcoin network.
